@@ -1,5 +1,5 @@
 /*
- This code was written by Binghui Wang in December, 2016.
+ This code was written by Neil Zhenqiang Gong, in September, 2015, and modified by Le Zhang in March, 2016 and Binghui Wang in December, 2016.
 
  It implements SybilSCAR algorithm proposed in the following paper:
  Binghui Wang, Le Zhang, and Neil Zhenqiang Gong. "SybilSCAR: Sybil Detection in Online Social Networks via Local Rule based Propagation", in INFOCOM, 2017.
@@ -22,7 +22,6 @@
 #include <iostream>
 #include <iomanip>
 #include <pthread.h>
-#include <time.h>
 
 #define GCC_VERSION (__GNUC__ * 10000 \
 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
@@ -89,6 +88,7 @@ public:
     //shuffle
     int* ordering_array;
 
+
     //number of threads
     int num_threads;
 
@@ -139,10 +139,10 @@ public:
             node1=(vertex)atol(strtok((char *)line.c_str()," \n\t\r"));
             node2=(vertex)atol(strtok(NULL," \n\t\r"));
             if (weighted_graph == 1) {
-                w=(double)atof(strtok(NULL," \n\t\r")) - 0.5;
+                w=(double)atof(strtok(NULL," \n\t\r"));
             }
             else{
-                w = weight - 0.5;
+                w = weight;
             }
             add_edge(node1, node2, w);
         }
@@ -168,7 +168,7 @@ public:
         //initialize priors as theta_unl
         vertex node;
         for (node = 0; node < N; node++) {
-            prior[node] = theta_unl - 0.5;
+            prior[node] = theta_unl;
         }
 
         if (prior_file != "") {
@@ -182,7 +182,7 @@ public:
             while(getline(in,line)!=NULL){
                 node=(vertex)atol(strtok((char *)line.c_str()," \n\t\r"));
                 score=(double)atof(strtok(NULL," \n\t\r"));
-                prior[node] = score - 0.5;
+                prior[node] = score;
             }
 
             in.close();
@@ -202,7 +202,7 @@ public:
             vertex sub;
             while (pos_train_str){
                 pos_train_str >> sub;
-                prior[sub] = theta_pos - 0.5;
+                prior[sub] = theta_pos;
             }
 
             //reading labeled Sybils
@@ -210,7 +210,7 @@ public:
             istringstream neg_train_str(line);
             while (neg_train_str){
                 neg_train_str >> sub;
-                prior[sub] = theta_neg - 0.5;
+                prior[sub] = theta_neg;
             }
 
             in.close();
@@ -220,21 +220,20 @@ public:
     }
 
 
-    /* Write final posterior probabilities of nodes to the output file */
-    // The final posterior probability is changed from p (in the residual form) to p + 0.5.
+    /* Write final posteriors to the output file */
     void write_posterior(){
 
         ofstream out(post_file, ofstream::out);
 
         for (vertex i = 0; i < N; i++) {
-            out << i << " " << setprecision(10) << post[i] + 0.5 << endl;
+            out << i << " " << setprecision(10) << post[i] << endl;
         }
 
         out.close();
 
     }
 
-    // Mainloop of SybilSCAR
+
     static void * lbp_thread(void *arg_pointer){
 
         Data * pointer = ((lbp_arg *)arg_pointer)->data_pointer;
@@ -250,33 +249,48 @@ public:
         }
 
         vertex node;
+        double message;
         list<pair<vertex, double> >::iterator nei_iter;
+        double value[2], sum;
 
         for (vertex index = start; index < end; index++) {
             node = pointer->ordering_array[index];
 
             //update the the post for node
+            value[0] = 1;
+            value[1] = 1;
             for (nei_iter = pointer->network_map[node].begin(); nei_iter != pointer->network_map[node].end(); nei_iter++) {
 
-                pointer->post[node] += 2 * pointer->post_pre[(*nei_iter).first] * (*nei_iter).second;
+                message = pointer->post_pre[(*nei_iter).first] * (*nei_iter).second + (1 - pointer->post_pre[(*nei_iter).first]) * (1 - (*nei_iter).second);
+
+                if (message < 1e-5) {
+                    message = 1e-5;
+                }
+
+                if (message > 1 - 1e-5) {
+                    message = 1 - 1e-5;
+                }
+
+                value[1] *= message;
+                value[0] *= (1 - message);
+
+                //normalize the values to avoid underflow or overflow
+                sum = value[0] + value[1];
+                value[0] /= sum;
+                value[1] /= sum;
 
             }
 
-            pointer->post[node] += pointer->prior[node];
-
-            if (pointer->post[node] > 0.5){
-                pointer->post[node] = 0.5;
-            }
-
-            if (pointer->post[node] < -0.5){
-                pointer->post[node] = -0.5;
-            }
+            value[1] *= pointer->prior[node];
+            value[0] *= 1 - pointer->prior[node];
+            sum = value[0] + value[1];
+            pointer->post[node] = value[1] / sum;
 
         }
 
     }
 
-    // Multithread to speed up the calculation
+
     void lbp(){
 
         ordering_array = (int*) malloc(sizeof(int) * N);
@@ -335,22 +349,25 @@ public:
 
         //default setting
         network_file = "";
+        max_iter = 10;
+
+        theta_pos = 0.9;
+        theta_neg = 0.1;
+        theta_unl = 0.5;
+
+        weight = 0.9;
+
         train_set_file = "";
         post_file = "";
         prior_file = "";
 
-
-        theta_pos = 0.6;
-        theta_neg = 0.4;
-        theta_unl = 0.5;
-
-        weighted_graph = 0;
-		weight = 0.6;
+        //by default, weighted graph
+        weighted_graph = 1;
 
         num_threads = 1;
-        max_iter = 10;
 
         int i = 1;
+
         while (i < argc) {
 
             if (strcmp(argv[i],"-graphfile") == 0){
@@ -395,6 +412,7 @@ public:
         }
     }
 };
+
 
 int main (int argc, char **argv)
 {
